@@ -50,7 +50,7 @@ if (!SHOP || !TOKEN) {
 }
 
 // Middleware
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5173')
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5173,https://shopify-suit-configurator.vercel.app')
   .split(',')
   .map(origin => origin.trim())
   .filter(Boolean);
