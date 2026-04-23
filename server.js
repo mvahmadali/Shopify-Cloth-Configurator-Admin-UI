@@ -59,10 +59,32 @@ const isDevLocalOrigin = (origin) => {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 };
 
+const isAllowedOrigin = (origin) => {
+  return Boolean(origin) && (allowedOrigins.includes(origin) || isDevLocalOrigin(origin));
+};
+
+const setCorsHeaders = (req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+
+  next();
+};
+
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser requests (no Origin header), configured origins, and local dev hosts.
-    if (!origin || allowedOrigins.includes(origin) || isDevLocalOrigin(origin)) {
+    if (!origin || isAllowedOrigin(origin)) {
       callback(null, true);
       return;
     }
@@ -74,6 +96,7 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
+app.use(setCorsHeaders);
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json());
