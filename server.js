@@ -50,10 +50,19 @@ if (!SHOP || !TOKEN) {
 }
 
 // Middleware
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5173,https://shopify-suit-configurator.vercel.app')
-  .split(',')
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://shopify-suit-configurator.vercel.app'
+];
+
+const configuredOrigins = [process.env.CORS_ORIGINS, process.env.CORS_ORIGIN]
+  .filter(Boolean)
+  .flatMap(value => value.split(','))
   .map(origin => origin.trim())
   .filter(Boolean);
+
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...configuredOrigins])];
 
 const isDevLocalOrigin = (origin) => {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
