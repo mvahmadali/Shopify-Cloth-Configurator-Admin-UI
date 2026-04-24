@@ -2,8 +2,20 @@ import mongoose from 'mongoose';
 
 const { Schema } = mongoose;
 
-// Option Schema (nested in Variation)
+// Option Schema (referenced by Variation)
 const optionSchema = new Schema({
+  productId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true,
+    index: true
+  },
+  variationId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Variation',
+    required: true,
+    index: true
+  },
   name: {
     type: String,
     required: true
@@ -30,8 +42,14 @@ const optionSchema = new Schema({
   }
 });
 
-// Variation Schema (nested in Product)
+// Variation Schema (referenced by Product)
 const variationSchema = new Schema({
+  productId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true,
+    index: true
+  },
   name: {
     type: String,
     required: true
@@ -40,7 +58,12 @@ const variationSchema = new Schema({
     type: String,
     required: true
   },
-  options: [optionSchema],
+  options: [
+    {
+      type: Schema.Types.ObjectId,
+      ref: 'Option'
+    }
+  ],
   createdAt: {
     type: Date,
     default: Date.now
@@ -51,7 +74,7 @@ const variationSchema = new Schema({
   }
 });
 
-// Product Schema
+// Product Schema (root)
 const productSchema = new Schema({
   name: {
     type: String,
@@ -68,7 +91,12 @@ const productSchema = new Schema({
     type: String,
     default: null
   },
-  variations: [variationSchema],
+  variations: [
+    {
+      type: Schema.Types.ObjectId,
+      ref: 'Variation'
+    }
+  ],
   createdAt: {
     type: Date,
     default: Date.now,

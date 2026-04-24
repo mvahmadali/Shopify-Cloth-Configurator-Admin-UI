@@ -1,47 +1,113 @@
-import { Product } from './schema.js';
+import { Product, Variation, Option } from './schema.js';
 
 /**
  * MongoDB-based database operations using Mongoose
- * Uses Product model which contains nested Variations and Options
+ * Uses referenced Product -> Variation -> Option collections
  */
+
+const toPlainProduct = (productDoc) => {
+  if (!productDoc) return null;
+
+  const product = productDoc.toObject ? productDoc.toObject() : productDoc;
+  const variations = Array.isArray(product.variations) ? product.variations : [];
+
+  return {
+    ...product,
+    variations: variations.map((variation) => ({
+      ...variation,
+      options: Array.isArray(variation.options) ? variation.options : []
+    }))
+  };
+};
+
+const hydrateProductById = async (id) => {
+  const product = await Product.findById(id)
+    .select('-__v')
+    .populate({
+      path: 'variations',
+      select: '-__v',
+      populate: {
+        path: 'options',
+        select: '-__v'
+      }
+    });
+
+  return toPlainProduct(product);
+};
+
+const hydrateProducts = async (query = {}) => {
+  const products = await Product.find(query)
+    .select('-__v')
+    .populate({
+      path: 'variations',
+      select: '-__v',
+      populate: {
+        path: 'options',
+        select: '-__v'
+      }
+    });
+
+  return products.map(toPlainProduct);
+};
 
 export const models = {
   // Product operations
   async createProduct(data) {
-    const normalizedVariations = Array.isArray(data.variations)
-      ? data.variations.map((variation) => ({
-          name: variation.name,
-          type: variation.type,
-          options: Array.isArray(variation.options)
-            ? variation.options.map((option) => ({
-                name: option.name,
-                value: option.value,
-                modelUrl: option.modelUrl || null,
-                priceModifier: option.priceModifier || 0
-              }))
-            : []
-        }))
-      : [];
-
     const product = new Product({
       name: data.name,
       SKU: data.SKU,
       baseModelUrl: data.baseModelUrl || null,
-      variations: normalizedVariations
+      variations: []
     });
-    return await product.save();
+
+    await product.save();
+
+    const safeVariations = Array.isArray(data.variations) ? data.variations : [];
+    for (const variationData of safeVariations) {
+      const variation = new Variation({
+        productId: product._id,
+        name: variationData.name,
+        type: variationData.type,
+        options: []
+      });
+      await variation.save();
+
+      const safeOptions = Array.isArray(variationData.options) ? variationData.options : [];
+      for (const optionData of safeOptions) {
+        const option = new Option({
+          productId: product._id,
+          variationId: variation._id,
+          name: optionData.name,
+          value: optionData.value,
+          modelUrl: optionData.modelUrl || null,
+          priceModifier: optionData.priceModifier || 0
+        });
+        await option.save();
+        variation.options.push(option._id);
+      }
+
+      variation.updatedAt = new Date();
+      await variation.save();
+      product.variations.push(variation._id);
+    }
+
+    product.updatedAt = new Date();
+    await product.save();
+
+    return await hydrateProductById(product._id);
   },
 
   async getProducts() {
-    return await Product.find().select('-__v');
+    return await hydrateProducts();
   },
 
   async getProductById(id) {
-    return await Product.findById(id).select('-__v');
+    return await hydrateProductById(id);
   },
 
   async getProductBySKU(sku) {
-    return await Product.findOne({ SKU: sku }).select('-__v');
+    const products = await hydrateProducts({ SKU: sku });
+    return products[0] || null;
   },
 
   async updateProduct(id, updateData) {
@@ -49,14 +115,26 @@ export const models = {
     if (!product) return null;
 
     if (updateData.name) product.name = updateData.name;
-    if (updateData.baseModelUrl) product.baseModelUrl = updateData.baseModelUrl;
+    if (updateData.baseModelUrl !== undefined) product.baseModelUrl = updateData.baseModelUrl;
     product.updatedAt = new Date();
 
-    return await product.save();
+    await product.save();
+    return await hydrateProductById(id);
   },
 
   async deleteProduct(id) {
-    return await Product.findByIdAndDelete(id);
+    const product = await Product.findById(id);
+    if (!product) return null;
+
+    const variationIds = product.variations.map((variationId) => variationId.toString());
+    await Option.deleteMany({ productId: id });
+    await Variation.deleteMany({ productId: id });
+    const deletedProduct = await Product.findByIdAndDelete(id).select('-__v');
+
+    return {
+      ...(deletedProduct?.toObject ? deletedProduct.toObject() : deletedProduct),
+      variations: variationIds
+    };
   },
 
   // Variation operations
@@ -64,24 +142,27 @@ export const models = {
     const product = await Product.findById(productId);
     if (!product) throw new Error('Product not found');
 
-    const variation = {
+    const variation = new Variation({
+      productId,
       name: variationData.name,
       type: variationData.type,
       options: []
-    };
+    });
 
-    product.variations.push(variation);
+    await variation.save();
+
+    product.variations.push(variation._id);
     product.updatedAt = new Date();
-    const saved = await product.save();
+    await product.save();
 
-    // Return the newly added variation
-    return saved.variations[saved.variations.length - 1];
+    return variation.toObject();
   },
 
   async getVariation(productId, variationId) {
-    const product = await Product.findById(productId);
+    const product = await Product.findById(productId).select('_id');
     if (!product) return null;
-    return product.variations.id(variationId);
+
+    return await Variation.findOne({ _id: variationId, productId }).select('-__v');
   },
 
   // Option operations
@@ -89,32 +170,38 @@ export const models = {
     const product = await Product.findById(productId);
     if (!product) throw new Error('Product not found');
 
-    const variation = product.variations.id(variationId);
-    if (!variation) throw new Error('Variation not found');
+    const variationDoc = await Variation.findOne({ _id: variationId, productId });
+    if (!variationDoc) throw new Error('Variation not found');
 
-    const option = {
+    const option = new Option({
+      productId,
+      variationId,
       name: optionData.name,
       value: optionData.value,
       modelUrl: optionData.modelUrl || null,
       priceModifier: optionData.priceModifier || 0
-    };
+    });
 
-    variation.options.push(option);
+    await option.save();
+
+    variationDoc.options.push(option._id);
+    variationDoc.updatedAt = new Date();
+    await variationDoc.save();
+
     product.updatedAt = new Date();
-    const saved = await product.save();
+    await product.save();
 
-    // Return the newly added option
-    return variation.options[variation.options.length - 1];
+    return option.toObject();
   },
 
   async getOption(productId, variationId, optionId) {
-    const product = await Product.findById(productId);
+    const product = await Product.findById(productId).select('_id');
     if (!product) return null;
 
-    const variation = product.variations.id(variationId);
+    const variation = await Variation.findOne({ _id: variationId, productId }).select('_id');
     if (!variation) return null;
 
-    return variation.options.id(optionId);
+    return await Option.findOne({ _id: optionId, variationId, productId }).select('-__v');
   },
 
   // Update option model URL
@@ -122,16 +209,19 @@ export const models = {
     const product = await Product.findById(productId);
     if (!product) throw new Error('Product not found');
 
-    const variation = product.variations.id(variationId);
+    const variation = await Variation.findOne({ _id: variationId, productId });
     if (!variation) throw new Error('Variation not found');
 
-    const option = variation.options.id(optionId);
+    const option = await Option.findOne({ _id: optionId, variationId, productId });
     if (!option) throw new Error('Option not found');
 
     option.modelUrl = modelUrl;
     option.updatedAt = new Date();
+    variation.updatedAt = new Date();
     product.updatedAt = new Date();
 
+    await option.save();
+    await variation.save();
     await product.save();
     return option;
   },
@@ -143,16 +233,18 @@ export const models = {
     const product = await Product.findById(productId);
     if (!product) throw new Error('Product not found');
 
-    const variation = product.variations.id(variationId);
+    const variation = await Variation.findOne({ _id: variationId, productId });
     if (!variation) throw new Error('Variation not found');
 
-    const option = variation.options.id(optionId);
+    const option = await Option.findOne({ _id: optionId, variationId, productId });
     if (!option) throw new Error('Option not found');
 
-    // Remove the option from the variation
     variation.options.pull(optionId);
+    variation.updatedAt = new Date();
     product.updatedAt = new Date();
     
+    await variation.save();
+    await Option.deleteOne({ _id: optionId, variationId, productId });
     await product.save();
     console.log('Option deleted successfully');
     return option;
